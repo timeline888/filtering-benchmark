@@ -1,0 +1,94 @@
+# 滤波基石系统 - 全局默认配置
+project:
+  name: "filter_benchmark"
+  description: "旋转机械振动/声学信号滤波降噪评估"
+
+signal:
+  source:
+    path: ""
+    sample_rate: null
+    channel: 0
+    reference_signal_path: null
+    simulate_reference: false
+  preprocessing:
+    remove_dc: true
+    resample: null
+    normalize: false
+    segment_duration_sec: null
+    segment_overlap: 0.0
+
+algorithms:
+  selection:
+    mode: "all"  # all | selected | category
+    categories: []
+    selected_ids: []
+    param_overrides: {}
+
+envelope:
+  bandpass:
+    enabled: false
+    low_cutoff: 2000
+    high_cutoff: 5000
+    order: 4
+  n_fft: null
+  fault_frequencies:
+    mode: "manual"
+    manual:
+      bpfo: null
+      bpfi: null
+      bsf: null
+      ftf: null
+      gmf: null
+      fr: null
+    auto:
+      bearing_params:
+        bearing_type: null
+        pitch_diameter: null
+        roller_diameter: null
+        n_rollers: null
+        contact_angle: 0
+        shaft_rpm: null
+        gear_teeth: null
+
+metrics:
+  enabled:
+    - ffr
+    - lsnr
+    - her
+    - esk
+    - gi
+    - ese
+    - ffa
+    - rffi
+    - fbr
+    - er
+    - kurtosis
+    - sk
+    - skewness
+    - hsi
+    - sln
+    - hln
+    - si
+    - cf
+    - if
+    - ser
+  weights: {}
+
+scoring:
+  method: "weighted_sum"
+  top_n: 3
+  normalization: "minmax"
+
+execution:
+  parallel_backend: "multiprocessing"
+  max_workers: 4
+  timeout_per_algorithm_sec: 300
+  gpu_indices: []
+
+output:
+  report:
+    format: "html"
+    include_charts: true
+  export:
+    formats: ["csv", "hdf5"]
+    output_dir: "results"
