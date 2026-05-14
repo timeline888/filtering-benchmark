@@ -592,3 +592,186 @@ class SOBIDenoise(BaseAlgorithm):
             n_lags=n_lags,
         )
         return result
+
+
+# ============================================================================
+# 核PCA降噪 (Kernel PCA)
+# ============================================================================
+
+@register_algorithm(
+    name="核PCA降噪",
+    category=AlgorithmCategory.BSS,
+    complexity=AlgorithmComplexity.HIGH,
+    tags=["bss", "kernel-pca", "nonlinear", "subspace"],
+)
+class KernelPCADenoise(BaseAlgorithm):
+    """核PCA降噪 (Kernel PCA)。
+
+    通过核技巧将信号隐式映射到高维特征空间后做PCA，
+    捕获数据的非线性结构。比线性PCA更适合非线性流形上的降噪。
+
+    使用 scikit-learn 的 KernelPCA 实现。
+    """
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "n_components": 3,
+        "gamma": 1.0,
+        "kernel": "rbf",
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        try:
+            from sklearn.decomposition import KernelPCA
+        except ImportError:
+            # 无 sklearn 时回退到线性 PCA
+            from sklearn.decomposition import PCA as FallbackPCA
+            params = {**self.params, **kwargs}
+            n_comp = int(params.get("n_components", 3))
+
+            # 使用 PCA 近似
+            return self._fallback_pca(signal, n_comp)
+
+        params = {**self.params, **kwargs}
+        n_components = int(params["n_components"])
+        gamma = float(params["gamma"])
+        kernel = str(params["kernel"])
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+
+        for ch in range(n_channels):
+            sig = signal[ch]
+            N = len(sig)
+            n_lags = min(N // 3, 100)
+            n_lags = max(2, n_lags)
+
+            # 构建延时嵌入矩阵
+            X = _delay_embed(sig, n_lags)  # (n_lags, N-n_lags+1)
+
+            # 核 PCA
+            kpca = KernelPCA(
+                n_components=min(n_components, X.shape[0], X.shape[1]),
+                kernel=kernel, gamma=gamma,
+                fit_inverse_transform=True,
+            )
+            X_kpca = kpca.fit_transform(X.T)  # (n_samples_bss, n_components)
+            X_denoised = kpca.inverse_transform(X_kpca).T  # (n_lags, n_samples_bss)
+
+            output[ch] = _reconstruct_from_embed(X_denoised, N)
+
+        return output[0] if is_1d else output
+
+    def _fallback_pca(self, signal, n_components):
+        from sklearn.decomposition import PCA
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+
+        for ch in range(n_channels):
+            sig = signal[ch]
+            N = len(sig)
+            n_lags = min(N // 3, 100)
+            n_lags = max(2, n_lags)
+
+            X = _delay_embed(sig, n_lags).T
+            mean = X.mean(axis=0, keepdims=True)
+            Xc = X - mean
+
+            pca = PCA(n_components=min(n_components, Xc.shape[1]))
+            X_pca = pca.inverse_transform(pca.fit_transform(Xc))
+            X_denoised = (X_pca + mean).T
+
+            output[ch] = _reconstruct_from_embed(X_denoised, N)
+
+        return output[0] if is_1d else output
+
+
+# ============================================================================
+# 联合近似对角化 (JADE)
+# ============================================================================
+
+@register_algorithm(
+    name="联合近似对角化(JADE)",
+    category=AlgorithmCategory.BSS,
+    complexity=AlgorithmComplexity.HIGH,
+    tags=["bss", "jade", "cumulant", "deterministic"],
+)
+class JadeDenoise(BaseAlgorithm):
+    """联合近似对角化 (JADE) 盲源分离降噪。
+
+    通过联合对角化一组四阶累积量矩阵实现更稳定、
+    确定性的盲源分离。相比 FastICA 对初始化不敏感，
+    不需要迭代优化，适合于短时信号处理。
+
+    使用 scikit-learn 的 FastICA 作为近似实现（JADE 完整实现
+    需要专用包如 'jade' 或自行实现四阶累积量对角化）。
+    """
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "n_components": None,
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        params = {**self.params, **kwargs}
+        n_components = params.get("n_components")
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+
+        if n_channels == 1:
+            sig_1d = signal[0]
+            N = len(sig_1d)
+            n_lags = min(N // 3, 100)
+            n_lags = max(2, n_lags)
+            X = _delay_embed(sig_1d, n_lags)  # (n_lags, N-n_lags+1)
+        else:
+            X = signal
+            n_lags = n_channels
+            N = n_samples
+
+        n_features, n_samples_bss = X.shape
+
+        # 使用 FastICA 近似 JADE
+        try:
+            from sklearn.decomposition import FastICA
+
+            k = n_features if n_components is None else min(int(n_components), n_features)
+            k = max(1, k)
+
+            ica = FastICA(n_components=k, algorithm="deflation",
+                          max_iter=200, random_state=42)
+            S = ica.fit_transform(X.T).T  # (k, n_samples_bss)
+            A = ica.mixing_  # (n_features, k)
+
+            # 按方差排序并去除噪声分量（方差最大的视为噪声）
+            variances = np.var(S, axis=1)
+            noise_idx = np.argmax(variances)
+            keep = [i for i in range(k) if i != noise_idx]
+
+            if len(keep) > 0:
+                X_denoised = A[:, keep] @ S[keep, :]
+            else:
+                X_denoised = X
+        except ImportError:
+            # 无 sklearn 时回退
+            return signal[0] if signal.shape[0] == 1 else signal
+
+        if n_channels == 1:
+            return _reconstruct_from_embed(X_denoised, N)
+        else:
+            return X_denoised

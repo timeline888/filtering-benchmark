@@ -25,7 +25,7 @@ from typing import Any, ClassVar, Dict, Optional
 
 import numpy as np
 
-from ...algorithms.base import BaseAlgorithm
+from ...algorithms.base import BaseAlgorithm, _to_stereo, _from_stereo
 from ...algorithms.decorators import register_algorithm, log_execution, validate_params
 from ...core.types import AlgorithmCategory, AlgorithmComplexity
 
@@ -45,20 +45,6 @@ except ImportError:
 
 
 # ==================== 全局工具函数 ====================
-
-
-def _to_stereo(signal: np.ndarray) -> np.ndarray:
-    """确保信号为 (n_channels, n_samples) 形状"""
-    if signal.ndim == 1:
-        return signal.reshape(1, -1)
-    return signal
-
-
-def _from_stereo(signal: np.ndarray, original: np.ndarray) -> np.ndarray:
-    """恢复信号为原始形状"""
-    if original.ndim == 1:
-        return signal[0]
-    return signal
 
 
 def _norch_fallback_spectral(
@@ -162,6 +148,71 @@ def _ensure_channels_last(x: np.ndarray) -> np.ndarray:
     elif x.ndim == 2:
         x = x[:, np.newaxis, :]  # (C, 1, N)
     return x
+
+
+def _overlap_add_denoise_torch(
+    signal: np.ndarray,
+    seg_len: int,
+    overlap: float,
+    net,
+    n_channels: int,
+    n_samples: int,
+) -> np.ndarray:
+    """
+    使用重叠相加法对信号进行分帧降噪（PyTorch 推理版）。
+
+    这是所有深度学习算法共用的分帧 + 重叠相加推理模板。
+    将输入信号分割为固定长度的帧，逐帧通过神经网络推理，
+    使用汉宁窗和重叠相加法拼接输出，消除帧边界效应。
+
+    Args:
+        signal: 输入信号，shape (n_channels, n_samples)
+        seg_len: 帧长度
+        overlap: 重叠率 (0~1)
+        net: PyTorch 网络，接受 (B, C, L) 输入
+        n_channels: 通道数
+        n_samples: 样本数
+
+    Returns:
+        降噪后的信号，shape (n_channels, n_samples)
+    """
+    import torch
+
+    device = torch.device("cpu")
+    net.to(device)
+    output = np.zeros_like(signal, dtype=np.float64)
+
+    for ch in range(n_channels):
+        sig = signal[ch].astype(np.float32)
+        hop = int(seg_len * (1.0 - overlap))
+        if hop < 1:
+            hop = 1
+        pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
+        if pad_len > 0:
+            sig = np.pad(sig, (0, pad_len), mode="reflect")
+        n_frames = (len(sig) - seg_len) // hop + 1
+
+        out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
+        window = np.hanning(seg_len).astype(np.float32)
+
+        for i in range(n_frames):
+            start = i * hop
+            frame = sig[start: start + seg_len]
+            frame_t = torch.from_numpy(frame).unsqueeze(0).unsqueeze(0)  # (1, 1, seg_len)
+            with torch.no_grad():
+                denoised_t = net(frame_t)
+            denoised = denoised_t.squeeze().cpu().numpy()
+            out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
+
+        weight = np.zeros(len(sig), dtype=np.float32)
+        for i in range(n_frames):
+            start = i * hop
+            weight[start: start + seg_len] += window
+        weight = np.maximum(weight, 1e-12)
+        out_sig = out_frames[:len(sig)] / weight
+        output[ch] = out_sig[:n_samples].astype(np.float64)
+
+    return output
 
 
 # ==================== PyTorch 网络定义（仅当 torch 可用时使用）====================
@@ -391,32 +442,41 @@ def _build_unet_1d_net(
 
 
 def _build_gan_generator_net(
-    latent_dim: int = 16,
-    output_dim: int = 256,
+    input_dim: int = 256,
+    hidden_dim: int = 64,
 ) -> Optional[Any]:
-    """构建轻量级GAN Generator。"""
+    """构建用于降噪的 Generator 网络（替代原随机噪声输入方案）。
+
+    该网络采用残差全连接结构，直接以含噪信号片段为输入，
+    输出降噪后的信号片段，可以嵌入 GAN 框架作为生成器使用。
+    相比原方案（随机潜在向量 + SGD 匹配）更有效且可用。
+    """
     if not _TORCH_AVAILABLE:
         return None
     try:
 
         class _Generator(nn.Module):
-            def __init__(self, ld: int, od: int):
+            def __init__(self, inp_dim: int, hid_dim: int):
                 super().__init__()
-                self.net = nn.Sequential(
-                    nn.Linear(ld, 64),
+                self.encoder = nn.Sequential(
+                    nn.Linear(inp_dim, hid_dim),
                     nn.ReLU(inplace=True),
-                    nn.Linear(64, 128),
+                    nn.Linear(hid_dim, hid_dim),
                     nn.ReLU(inplace=True),
-                    nn.Linear(128, od),
-                    nn.Tanh(),
                 )
+                self.decoder = nn.Linear(hid_dim, inp_dim)
 
-            def forward(self, z: torch.Tensor) -> torch.Tensor:
-                return self.net(z)
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                # x: (B, 1, L)
+                batch_size = x.size(0)
+                x_flat = x.view(batch_size, -1)  # (B, L)
+                encoded = self.encoder(x_flat)
+                residual = self.decoder(encoded)  # (B, L)
+                # 残差连接：输出 = 输入 + 残差
+                output = x_flat + residual
+                return output.view(batch_size, 1, -1)  # (B, 1, L)
 
-        net = _Generator(latent_dim, output_dim)
-        # num_params = sum(p.numel() for p in net.parameters())
-        # print(f"[GAN Generator] 参数量: {num_params}")
+        net = _Generator(input_dim, hidden_dim)
         net.eval()
         return net
     except Exception:
@@ -695,7 +755,6 @@ class DaeDenoise(BaseAlgorithm):
         overlap = float(params.get("overlap", 0.5))
         n_channels, n_samples = signal.shape
 
-        # 构建网络（如果尚未构建）
         if self._net is None:
             enc_dim = int(params.get("encoding_dim", 16))
             hid_dim = int(params.get("hidden_dim", 32))
@@ -707,44 +766,10 @@ class DaeDenoise(BaseAlgorithm):
             if self._net is None:
                 raise RuntimeError("Failed to build DAE network")
 
-        device = torch.device("cpu")
-        self._net.to(device)
-        output = np.zeros_like(signal, dtype=np.float64)
-
-        for ch in range(n_channels):
-            sig = signal[ch].astype(np.float32)
-            # 分帧 + 重叠相加
-            hop = int(seg_len * (1.0 - overlap))
-            if hop < 1:
-                hop = 1
-            # 填充
-            pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
-            if pad_len > 0:
-                sig = np.pad(sig, (0, pad_len), mode="reflect")
-            n_frames = (len(sig) - seg_len) // hop + 1
-
-            out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
-            window = np.hanning(seg_len).astype(np.float32)
-
-            for i in range(n_frames):
-                start = i * hop
-                frame = sig[start: start + seg_len]
-                frame_t = torch.from_numpy(frame).unsqueeze(0).unsqueeze(0)  # (1, 1, seg_len)
-                with torch.no_grad():
-                    denoised_t = self._net(frame_t)
-                denoised = denoised_t.squeeze().cpu().numpy()
-                out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
-
-            # 重叠相加归一化
-            weight = np.zeros(len(sig), dtype=np.float32)
-            for i in range(n_frames):
-                start = i * hop
-                weight[start: start + seg_len] += window
-            weight = np.maximum(weight, 1e-12)
-            out_sig = out_frames[:len(sig)] / weight
-            output[ch] = out_sig[:n_samples].astype(np.float64)
-
-        return output
+        return _overlap_add_denoise_torch(
+            signal, seg_len, overlap, self._net,
+            n_channels, n_samples,
+        )
 
 
 # ==================== 2. CDAE (卷积去噪自编码器) ====================
@@ -820,41 +845,10 @@ class CdaDenoise(BaseAlgorithm):
             if self._net is None:
                 raise RuntimeError("Failed to build CDAE network")
 
-        device = torch.device("cpu")
-        self._net.to(device)
-        output = np.zeros_like(signal, dtype=np.float64)
-
-        for ch in range(n_channels):
-            sig = signal[ch].astype(np.float32)
-            hop = int(seg_len * (1.0 - overlap))
-            if hop < 1:
-                hop = 1
-            pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
-            if pad_len > 0:
-                sig = np.pad(sig, (0, pad_len), mode="reflect")
-            n_frames = (len(sig) - seg_len) // hop + 1
-
-            out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
-            window = np.hanning(seg_len).astype(np.float32)
-
-            for i in range(n_frames):
-                start = i * hop
-                frame = sig[start: start + seg_len]
-                frame_t = torch.from_numpy(frame).unsqueeze(0).unsqueeze(0)  # (1, 1, seg_len)
-                with torch.no_grad():
-                    denoised_t = self._net(frame_t)
-                denoised = denoised_t.squeeze().cpu().numpy()
-                out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
-
-            weight = np.zeros(len(sig), dtype=np.float32)
-            for i in range(n_frames):
-                start = i * hop
-                weight[start: start + seg_len] += window
-            weight = np.maximum(weight, 1e-12)
-            out_sig = out_frames[:len(sig)] / weight
-            output[ch] = out_sig[:n_samples].astype(np.float64)
-
-        return output
+        return _overlap_add_denoise_torch(
+            signal, seg_len, overlap, self._net,
+            n_channels, n_samples,
+        )
 
 
 # ==================== 3. DnCNN ====================
@@ -937,41 +931,10 @@ class DncnnDenoise(BaseAlgorithm):
             if self._net is None:
                 raise RuntimeError("Failed to build DnCNN network")
 
-        device = torch.device("cpu")
-        self._net.to(device)
-        output = np.zeros_like(signal, dtype=np.float64)
-
-        for ch in range(n_channels):
-            sig = signal[ch].astype(np.float32)
-            hop = int(seg_len * (1.0 - overlap))
-            if hop < 1:
-                hop = 1
-            pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
-            if pad_len > 0:
-                sig = np.pad(sig, (0, pad_len), mode="reflect")
-            n_frames = (len(sig) - seg_len) // hop + 1
-
-            out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
-            window = np.hanning(seg_len).astype(np.float32)
-
-            for i in range(n_frames):
-                start = i * hop
-                frame = sig[start: start + seg_len]
-                frame_t = torch.from_numpy(frame).unsqueeze(0).unsqueeze(0)
-                with torch.no_grad():
-                    denoised_t = self._net(frame_t)
-                denoised = denoised_t.squeeze().cpu().numpy()
-                out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
-
-            weight = np.zeros(len(sig), dtype=np.float32)
-            for i in range(n_frames):
-                start = i * hop
-                weight[start: start + seg_len] += window
-            weight = np.maximum(weight, 1e-12)
-            out_sig = out_frames[:len(sig)] / weight
-            output[ch] = out_sig[:n_samples].astype(np.float64)
-
-        return output
+        return _overlap_add_denoise_torch(
+            signal, seg_len, overlap, self._net,
+            n_channels, n_samples,
+        )
 
 
 # ==================== 4. UNet ====================
@@ -1051,41 +1014,10 @@ class UnetDenoise(BaseAlgorithm):
             if self._net is None:
                 raise RuntimeError("Failed to build UNet network")
 
-        device = torch.device("cpu")
-        self._net.to(device)
-        output = np.zeros_like(signal, dtype=np.float64)
-
-        for ch in range(n_channels):
-            sig = signal[ch].astype(np.float32)
-            hop = int(seg_len * (1.0 - overlap))
-            if hop < 1:
-                hop = 1
-            pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
-            if pad_len > 0:
-                sig = np.pad(sig, (0, pad_len), mode="reflect")
-            n_frames = (len(sig) - seg_len) // hop + 1
-
-            out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
-            window = np.hanning(seg_len).astype(np.float32)
-
-            for i in range(n_frames):
-                start = i * hop
-                frame = sig[start: start + seg_len]
-                frame_t = torch.from_numpy(frame).unsqueeze(0).unsqueeze(0)
-                with torch.no_grad():
-                    denoised_t = self._net(frame_t)
-                denoised = denoised_t.squeeze().cpu().numpy()
-                out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
-
-            weight = np.zeros(len(sig), dtype=np.float32)
-            for i in range(n_frames):
-                start = i * hop
-                weight[start: start + seg_len] += window
-            weight = np.maximum(weight, 1e-12)
-            out_sig = out_frames[:len(sig)] / weight
-            output[ch] = out_sig[:n_samples].astype(np.float64)
-
-        return output
+        return _overlap_add_denoise_torch(
+            signal, seg_len, overlap, self._net,
+            n_channels, n_samples,
+        )
 
 
 # ==================== 5. GAN降噪 ====================
@@ -1118,18 +1050,17 @@ class GanDenoise(BaseAlgorithm):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._generator = None
+        self._net = None
 
     def setup(self) -> None:
         if _TORCH_AVAILABLE:
-            ld = int(self.params.get("latent_dim", 16))
             seg_len = int(self.params.get("segment_length", 256))
-            self._generator = _build_gan_generator_net(
-                latent_dim=ld, output_dim=seg_len
+            self._net = _build_gan_generator_net(
+                input_dim=seg_len,
             )
 
     def teardown(self) -> None:
-        self._generator = None
+        self._net = None
 
     @log_execution
     @validate_params
@@ -1139,7 +1070,7 @@ class GanDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
-        if _TORCH_AVAILABLE and self._generator is not None:
+        if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
@@ -1154,66 +1085,19 @@ class GanDenoise(BaseAlgorithm):
 
         seg_len = int(params.get("segment_length", 256))
         overlap = float(params.get("overlap", 0.5))
-        latent_dim = int(params.get("latent_dim", 16))
-        n_iter = int(params.get("n_iter", 100))
         n_channels, n_samples = signal.shape
 
-        if self._generator is None:
-            self._generator = _build_gan_generator_net(
-                latent_dim=latent_dim, output_dim=seg_len
+        if self._net is None:
+            self._net = _build_gan_generator_net(
+                input_dim=seg_len,
             )
-            if self._generator is None:
+            if self._net is None:
                 raise RuntimeError("Failed to build GAN generator")
 
-        device = torch.device("cpu")
-        self._generator.to(device)
-        output = np.zeros_like(signal, dtype=np.float64)
-
-        for ch in range(n_channels):
-            sig = signal[ch].astype(np.float32)
-            hop = int(seg_len * (1.0 - overlap))
-            if hop < 1:
-                hop = 1
-            pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
-            if pad_len > 0:
-                sig = np.pad(sig, (0, pad_len), mode="reflect")
-            n_frames = (len(sig) - seg_len) // hop + 1
-
-            out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
-            window = np.hanning(seg_len).astype(np.float32)
-
-            for i in range(n_frames):
-                start = i * hop
-                # 从噪声帧映射：使用潜在向量的迭代优化
-                z = torch.randn(1, latent_dim, device=device)
-                z.requires_grad_(True)
-
-                frame = sig[start: start + seg_len]
-                frame_t = torch.from_numpy(frame).unsqueeze(0).to(device)
-
-                # 简单迭代优化以匹配信号帧
-                optimizer = torch.optim.SGD([z], lr=0.01)
-                for _ in range(min(n_iter, 10)):  # 限制迭代次数以保证CPU速度（前原为20）
-                    optimizer.zero_grad()
-                    generated = self._generator(z)
-                    loss = F.mse_loss(generated, frame_t)
-                    loss.backward()
-                    optimizer.step()
-
-                with torch.no_grad():
-                    denoised_t = self._generator(z)
-                denoised = denoised_t.squeeze().cpu().numpy()
-                out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
-
-            weight = np.zeros(len(sig), dtype=np.float32)
-            for i in range(n_frames):
-                start = i * hop
-                weight[start: start + seg_len] += window
-            weight = np.maximum(weight, 1e-12)
-            out_sig = out_frames[:len(sig)] / weight
-            output[ch] = out_sig[:n_samples].astype(np.float64)
-
-        return output
+        return _overlap_add_denoise_torch(
+            signal, seg_len, overlap, self._net,
+            n_channels, n_samples,
+        )
 
 
 # ==================== 6. DRSN (深度残差收缩网络) ====================
@@ -1291,41 +1175,10 @@ class DrsnDenoise(BaseAlgorithm):
             if self._net is None:
                 raise RuntimeError("Failed to build DRSN network")
 
-        device = torch.device("cpu")
-        self._net.to(device)
-        output = np.zeros_like(signal, dtype=np.float64)
-
-        for ch in range(n_channels):
-            sig = signal[ch].astype(np.float32)
-            hop = int(seg_len * (1.0 - overlap))
-            if hop < 1:
-                hop = 1
-            pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
-            if pad_len > 0:
-                sig = np.pad(sig, (0, pad_len), mode="reflect")
-            n_frames = (len(sig) - seg_len) // hop + 1
-
-            out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
-            window = np.hanning(seg_len).astype(np.float32)
-
-            for i in range(n_frames):
-                start = i * hop
-                frame = sig[start: start + seg_len]
-                frame_t = torch.from_numpy(frame).unsqueeze(0).unsqueeze(0)
-                with torch.no_grad():
-                    denoised_t = self._net(frame_t)
-                denoised = denoised_t.squeeze().cpu().numpy()
-                out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
-
-            weight = np.zeros(len(sig), dtype=np.float32)
-            for i in range(n_frames):
-                start = i * hop
-                weight[start: start + seg_len] += window
-            weight = np.maximum(weight, 1e-12)
-            out_sig = out_frames[:len(sig)] / weight
-            output[ch] = out_sig[:n_samples].astype(np.float64)
-
-        return output
+        return _overlap_add_denoise_torch(
+            signal, seg_len, overlap, self._net,
+            n_channels, n_samples,
+        )
 
 
 # ==================== 7. TCN-LSTM ====================
@@ -1408,41 +1261,10 @@ class TcnLstmDenoise(BaseAlgorithm):
             if self._net is None:
                 raise RuntimeError("Failed to build TCN-LSTM network")
 
-        device = torch.device("cpu")
-        self._net.to(device)
-        output = np.zeros_like(signal, dtype=np.float64)
-
-        for ch in range(n_channels):
-            sig = signal[ch].astype(np.float32)
-            hop = int(seg_len * (1.0 - overlap))
-            if hop < 1:
-                hop = 1
-            pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
-            if pad_len > 0:
-                sig = np.pad(sig, (0, pad_len), mode="reflect")
-            n_frames = (len(sig) - seg_len) // hop + 1
-
-            out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
-            window = np.hanning(seg_len).astype(np.float32)
-
-            for i in range(n_frames):
-                start = i * hop
-                frame = sig[start: start + seg_len]
-                frame_t = torch.from_numpy(frame).unsqueeze(0).unsqueeze(0)
-                with torch.no_grad():
-                    denoised_t = self._net(frame_t)
-                denoised = denoised_t.squeeze().cpu().numpy()
-                out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
-
-            weight = np.zeros(len(sig), dtype=np.float32)
-            for i in range(n_frames):
-                start = i * hop
-                weight[start: start + seg_len] += window
-            weight = np.maximum(weight, 1e-12)
-            out_sig = out_frames[:len(sig)] / weight
-            output[ch] = out_sig[:n_samples].astype(np.float64)
-
-        return output
+        return _overlap_add_denoise_torch(
+            signal, seg_len, overlap, self._net,
+            n_channels, n_samples,
+        )
 
 
 # ==================== 8. Transformer降噪 ====================
@@ -1530,38 +1352,7 @@ class TransformerDenoise(BaseAlgorithm):
             if self._net is None:
                 raise RuntimeError("Failed to build Transformer network")
 
-        device = torch.device("cpu")
-        self._net.to(device)
-        output = np.zeros_like(signal, dtype=np.float64)
-
-        for ch in range(n_channels):
-            sig = signal[ch].astype(np.float32)
-            hop = int(seg_len * (1.0 - overlap))
-            if hop < 1:
-                hop = 1
-            pad_len = seg_len - ((n_samples - seg_len) % hop) if (n_samples >= seg_len) else seg_len - n_samples
-            if pad_len > 0:
-                sig = np.pad(sig, (0, pad_len), mode="reflect")
-            n_frames = (len(sig) - seg_len) // hop + 1
-
-            out_frames = np.zeros(n_frames * seg_len, dtype=np.float32)
-            window = np.hanning(seg_len).astype(np.float32)
-
-            for i in range(n_frames):
-                start = i * hop
-                frame = sig[start: start + seg_len]
-                frame_t = torch.from_numpy(frame).unsqueeze(0).unsqueeze(0)
-                with torch.no_grad():
-                    denoised_t = self._net(frame_t)
-                denoised = denoised_t.squeeze().cpu().numpy()
-                out_frames[i * seg_len: (i + 1) * seg_len] += denoised * window
-
-            weight = np.zeros(len(sig), dtype=np.float32)
-            for i in range(n_frames):
-                start = i * hop
-                weight[start: start + seg_len] += window
-            weight = np.maximum(weight, 1e-12)
-            out_sig = out_frames[:len(sig)] / weight
-            output[ch] = out_sig[:n_samples].astype(np.float64)
-
-        return output
+        return _overlap_add_denoise_torch(
+            signal, seg_len, overlap, self._net,
+            n_channels, n_samples,
+        )

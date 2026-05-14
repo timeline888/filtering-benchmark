@@ -621,3 +621,178 @@ class KSVDDenoise(BaseAlgorithm):
 
         weight = np.where(weight > 0, weight, 1.0)
         return recon / weight
+
+
+# ==================== CoSaMP 辅助函数 ====================
+
+
+def _cosamp(
+    signal: np.ndarray,
+    dictionary: np.ndarray,
+    sparsity: int = 10,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> np.ndarray:
+    """压缩采样匹配追踪 (CoSaMP) 稀疏编码。
+
+    每次迭代选择 2*sparsity 个候选原子，通过最小二乘
+    和回溯剔除保留最相关的 sparsity 个原子。
+    """
+    m, n = dictionary.shape
+    x = np.zeros(n)
+    r = signal.copy()
+    support = set()
+
+    for _ in range(max_iter):
+        h = dictionary.T @ r
+        idx_new = np.argsort(np.abs(h))[-2 * sparsity:]
+        support = support.union(set(idx_new.tolist()))
+
+        D_s = dictionary[:, list(support)]
+        try:
+            x_s, _, _, _ = np.linalg.lstsq(D_s, signal, rcond=None)
+        except np.linalg.LinAlgError:
+            break
+
+        idx_sort = np.argsort(np.abs(x_s))[-sparsity:]
+        support = set(np.array(list(support))[idx_sort].tolist())
+
+        x_new = np.zeros(n)
+        x_new[list(support)] = x_s[idx_sort]
+        r = signal - dictionary @ x_new
+
+        if np.linalg.norm(r) < tol:
+            break
+        x = x_new
+
+    return dictionary @ x
+
+
+# ==================== FISTA 辅助函数 ====================
+
+
+def _soft_threshold(x: np.ndarray, alpha: float) -> np.ndarray:
+    """软阈值算子"""
+    return np.sign(x) * np.maximum(np.abs(x) - alpha, 0.0)
+
+
+def _fista_lasso(
+    signal: np.ndarray,
+    dictionary: np.ndarray,
+    lam: float = 0.1,
+    max_iter: int = 300,
+    tol: float = 1e-7,
+) -> np.ndarray:
+    """FISTA 求解 LASSO 问题。
+
+    min 0.5 * ||Dx - y||^2 + lambda * ||x||_1
+    """
+    L = np.linalg.norm(dictionary, ord=2) ** 2
+    inv_L = 1.0 / L
+    n = dictionary.shape[1]
+
+    x = np.zeros(n)
+    z = np.zeros(n)
+    t = 1.0
+
+    for k in range(max_iter):
+        x_old = x.copy()
+        grad = dictionary.T @ (dictionary @ z - signal)
+        x = _soft_threshold(z - inv_L * grad, lam * inv_L)
+
+        t_new = 0.5 * (1 + np.sqrt(1 + 4 * t ** 2))
+        z = x + (t - 1) / t_new * (x - x_old)
+        t = t_new
+
+        if np.linalg.norm(x - x_old) < tol:
+            break
+
+    return dictionary @ x
+
+
+# ==================== 5. 压缩采样匹配追踪 (CoSaMP) ====================
+
+@register_algorithm(
+    name="压缩采样匹配追踪(CoSaMP)",
+    category=AlgorithmCategory.SPARSE,
+    complexity=AlgorithmComplexity.HIGH,
+    tags=["sparse", "cosamp", "compressive-sensing", "greedy"],
+)
+class CosampDenoise(BaseAlgorithm):
+    """压缩采样匹配追踪 (CoSaMP) 降噪。"""
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "sparsity": 10,
+        "max_iter": 100,
+        "tolerance": 1e-6,
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        params = {**self.params, **kwargs}
+        sparsity = int(params.get("sparsity", 10))
+        max_iter = int(params.get("max_iter", 100))
+        tol = float(params.get("tolerance", 1e-6))
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+
+        n_atoms = min(2 * n_samples, 256)
+        dictionary = _gabor_dictionary(n_samples, n_atoms, sample_rate)
+
+        for ch in range(n_channels):
+            try:
+                output[ch] = _cosamp(signal[ch], dictionary, sparsity, max_iter, tol)
+            except Exception:
+                output[ch] = signal[ch]
+
+        return output[0] if is_1d else output
+
+
+# ==================== 6. 快速迭代收缩阈值算法 (FISTA) ====================
+
+@register_algorithm(
+    name="快速迭代收缩阈值算法(FISTA)",
+    category=AlgorithmCategory.SPARSE,
+    complexity=AlgorithmComplexity.HIGH,
+    tags=["sparse", "fista", "l1", "convex"],
+)
+class FistaDenoise(BaseAlgorithm):
+    """快速迭代收缩阈值算法 (FISTA) 降噪。"""
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "lambda_": 0.1,
+        "max_iter": 300,
+        "tolerance": 1e-7,
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        params = {**self.params, **kwargs}
+        lam = float(params.get("lambda_", 0.1))
+        max_iter = int(params.get("max_iter", 300))
+        tol = float(params.get("tolerance", 1e-7))
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+
+        n_atoms = min(2 * n_samples, 256)
+        dictionary = _gabor_dictionary(n_samples, n_atoms, sample_rate)
+
+        for ch in range(n_channels):
+            try:
+                output[ch] = _fista_lasso(signal[ch], dictionary, lam, max_iter, tol)
+            except Exception:
+                output[ch] = signal[ch]
+
+        return output[0] if is_1d else output

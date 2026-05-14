@@ -348,3 +348,111 @@ class WienerFilter(BaseAlgorithm):
             output[ch, 1:] = y[: n_samples - 1]
 
         return output[0] if is_1d else output
+
+
+@register_algorithm(
+    name="变步长LMS自适应滤波",
+    category=AlgorithmCategory.ADAPTIVE,
+    complexity=AlgorithmComplexity.LOW,
+    tags=["adaptive", "vss-lms", "variable-step"]
+)
+class VsslmsAdaptiveFilter(BaseAlgorithm):
+    """变步长LMS自适应滤波 (VSSLMS)。
+
+    步长根据误差信号动态调整：误差大时大步长加速收敛，
+    误差小时小步长降低稳态失调。
+    使用 Kwong 方案: mu(n+1) = alpha*mu(n) + gamma*e^2(n)
+    """
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "filter_order": 32,
+        "mu_max": 0.1,
+        "mu_min": 0.001,
+        "alpha": 0.97,
+        "gamma": 0.0005,
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        params = {**self.params, **kwargs}
+        filter_order = int(params["filter_order"])
+        mu_max = float(params["mu_max"])
+        mu_min = float(params["mu_min"])
+        alpha = float(params["alpha"])
+        gamma = float(params["gamma"])
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+
+        for ch in range(n_channels):
+            sig = signal[ch]
+            w = np.zeros(filter_order)
+            mu = mu_max
+
+            for i in range(filter_order, n_samples):
+                x = sig[i - filter_order : i][::-1]
+                y = np.dot(w, x)
+                e = sig[i] - y
+                # 步长更新
+                mu = alpha * mu + gamma * e**2
+                mu = np.clip(mu, mu_min, mu_max)
+                w += mu * e * x
+                output[ch, i] = y
+            output[ch, :filter_order] = sig[:filter_order]
+
+        return output[0] if is_1d else output
+
+
+@register_algorithm(
+    name="泄露LMS自适应滤波",
+    category=AlgorithmCategory.ADAPTIVE,
+    complexity=AlgorithmComplexity.LOW,
+    tags=["adaptive", "leaky-lms", "regularized"]
+)
+class LeakyLmsAdaptiveFilter(BaseAlgorithm):
+    """泄露LMS自适应滤波 (Leaky LMS)。
+
+    在权重更新中加入泄露项 (1-mu*gamma)，等价于 L2 正则化，
+    抑制权重发散，适用于输入信号高度相关的场景。
+    """
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "filter_order": 32,
+        "mu": 0.01,
+        "gamma": 0.001,
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        params = {**self.params, **kwargs}
+        filter_order = int(params["filter_order"])
+        mu = float(params["mu"])
+        gamma = float(params["gamma"])
+        leak = 1.0 - mu * gamma
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+
+        for ch in range(n_channels):
+            sig = signal[ch]
+            w = np.zeros(filter_order)
+
+            for i in range(filter_order, n_samples):
+                x = sig[i - filter_order : i][::-1]
+                y = np.dot(w, x)
+                e = sig[i] - y
+                w = leak * w + mu * e * x
+                output[ch, i] = y
+            output[ch, :filter_order] = sig[:filter_order]
+
+        return output[0] if is_1d else output

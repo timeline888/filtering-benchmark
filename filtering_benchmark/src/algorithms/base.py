@@ -14,6 +14,34 @@ from ..core.types import AlgorithmCategory, AlgorithmComplexity, SignalDomain
 from ..core.exceptions import SignalTooLargeError
 
 
+# ==================== 共享工具函数 ====================
+
+
+def _to_stereo(signal: np.ndarray) -> np.ndarray:
+    """确保信号为 (n_channels, n_samples) 形状。
+
+    如果输入是1维，自动扩展为 (1, n_samples)。
+    """
+    if signal.ndim == 1:
+        return signal.reshape(1, -1)
+    return signal
+
+
+def _from_stereo(signal: np.ndarray, original: np.ndarray) -> np.ndarray:
+    """恢复信号为原始形状（逆 _to_stereo）。
+
+    Args:
+        signal: 处理后的信号，shape (n_channels, n_samples)
+        original: 原始输入信号，用于参考其 ndim
+
+    Returns:
+        若 original 是1维，返回 signal[0]；否则原样返回。
+    """
+    if original.ndim == 1:
+        return signal[0]
+    return signal
+
+
 class BaseAlgorithm(ABC):
     """滤波降噪算法基类"""
 

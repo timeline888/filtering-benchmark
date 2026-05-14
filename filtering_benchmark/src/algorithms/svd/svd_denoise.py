@@ -213,3 +213,78 @@ class HankelSVD(BaseAlgorithm):
             output[ch, :] = _hankel_reconstruct(H_denoised, n_samples)
 
         return output[0] if is_1d else output
+
+
+@register_algorithm(
+    name="随机化SVD降噪",
+    category=AlgorithmCategory.SVD,
+    complexity=AlgorithmComplexity.MEDIUM,
+    tags=["svd", "randomized", "large-scale", "fast"],
+)
+class RandomizedSvdDenoise(BaseAlgorithm):
+    """随机化SVD降噪 (Randomized SVD)。
+
+    通过随机投影将原始矩阵投影到低维子空间后做SVD分解，
+    大幅降低计算成本。适用于大规模矩阵的SVD降噪。
+
+    对于信号长度 N 和窗口长度 L，复杂度从 O(LK^2) 降至 O(LKr)。
+    """
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "target_rank": 10,
+        "n_oversamples": 10,
+        "n_iter": 2,
+    }
+
+    max_signal_length: ClassVar[int] = 100000
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        self._check_signal_size(signal)
+        params = {**self.params, **kwargs}
+        target_rank = int(params["target_rank"])
+        n_oversamples = int(params["n_oversamples"])
+        n_iter = int(params["n_iter"])
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+
+        for ch in range(n_channels):
+            sig = signal[ch]
+            N = len(sig)
+            window_len = N // 3
+            window_len = max(3, min(window_len, N - 1))
+            K = N - window_len + 1
+
+            # 构建 Hankel 矩阵
+            H = _build_hankel(sig, window_len)
+
+            # 随机化 SVD
+            r = target_rank + n_oversamples
+            r = min(r, min(H.shape))
+
+            Omega = np.random.randn(H.shape[1], r)
+            Y = H @ Omega
+            Q, _ = np.linalg.qr(Y)
+
+            # 幂迭代（提高精度）
+            for _ in range(n_iter):
+                Q, _ = np.linalg.qr(H.T @ Q)
+                Q, _ = np.linalg.qr(H @ Q)
+
+            B = Q.T @ H
+            U_B, s, Vt = np.linalg.svd(B, full_matrices=False)
+            U = Q @ U_B
+
+            # 截断重构
+            k = min(target_rank, len(s))
+            H_denoised = U[:, :k] @ np.diag(s[:k]) @ Vt[:k, :]
+
+            output[ch, :] = _hankel_reconstruct(H_denoised, N)
+
+        return output[0] if is_1d else output

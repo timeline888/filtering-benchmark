@@ -157,6 +157,9 @@ class MEDDenoise(BaseAlgorithm):
           deconvolution filter. Mechanical Systems and Signal Processing.
         - Wiggins (1978). Minimum entropy deconvolution. Geoexploration.
     """
+    # MED 迭代优化 O(N*L^2*iter)，卷积矩阵规模随 N 增大而膨胀，设安全上限。
+    max_signal_length: ClassVar[int] = 50000
+
     default_params: ClassVar[Dict[str, Any]] = {
         "filter_order": 64,
         "max_iter": 30,
@@ -175,6 +178,7 @@ class MEDDenoise(BaseAlgorithm):
     @validate_params
     def denoise(self, signal: np.ndarray, sample_rate: float,
                 **kwargs) -> np.ndarray:
+        self._check_signal_size(signal)
         if not _HAS_SCIPY:
             warnings.warn("scipy 不可用，MED 返回原始信号")
             return np.asarray(signal, dtype=np.float64)
@@ -247,6 +251,9 @@ class MCKDDDenoise(BaseAlgorithm):
           and Application on Gear Tooth Chip Fault Detection.
           Journal of Sound and Vibration.
     """
+    # MCKD 涉及相关峭度迭代计算，卷积矩阵构造消耗 O(N*L)，设安全上限。
+    max_signal_length: ClassVar[int] = 50000
+
     default_params: ClassVar[Dict[str, Any]] = {
         "filter_order": 64,
         "period": None,
@@ -269,6 +276,7 @@ class MCKDDDenoise(BaseAlgorithm):
     @validate_params
     def denoise(self, signal: np.ndarray, sample_rate: float,
                 **kwargs) -> np.ndarray:
+        self._check_signal_size(signal)
         if not _HAS_SCIPY:
             warnings.warn("scipy 不可用，MCKD 返回原始信号")
             return np.asarray(signal, dtype=np.float64)
@@ -680,6 +688,9 @@ class CyclostationaryAnalysis(BaseAlgorithm):
         - Randall & Antoni (2011). Rolling element bearing diagnostics
           — A tutorial. Mechanical Systems and Signal Processing.
     """
+    # 循环平稳分析需计算多帧 STFT 和谱相关，涉及 FFT 和循环频率提取，设安全上限。
+    max_signal_length: ClassVar[int] = 200000
+
     default_params: ClassVar[Dict[str, Any]] = {
         "n_cyclic_freqs": 10,
         "max_cyclic_freq_ratio": 0.5,
@@ -696,6 +707,7 @@ class CyclostationaryAnalysis(BaseAlgorithm):
     @validate_params
     def denoise(self, signal: np.ndarray, sample_rate: float,
                 **kwargs) -> np.ndarray:
+        self._check_signal_size(signal)
         if not _HAS_SCIPY:
             warnings.warn("scipy 不可用，CyclostationaryAnalysis 返回原始信号")
             return np.asarray(signal, dtype=np.float64)

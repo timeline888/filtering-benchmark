@@ -1,5 +1,10 @@
 """
-高通巴特沃斯滤波器。
+高通巴特沃斯滤波器 (High-Pass Butterworth Filter)
+
+基于 scipy.signal.butter 的巴特沃斯高通滤波器实现，
+用于去除低频漂移和趋势项，使用 sosfiltfilt 零相位滤波。
+
+参考书：第3章第2节 - 高通滤波器
 """
 
 from typing import Any, ClassVar, Dict

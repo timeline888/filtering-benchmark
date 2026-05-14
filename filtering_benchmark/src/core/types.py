@@ -24,6 +24,7 @@ class AlgorithmCategory(str, Enum):
     ROTATING_SPECIFIC = "旋转机械专用"
     ACOUSTIC = "语音/声学降噪"
     ADVANCED = "其他前沿方法"
+    OPTIMIZATION = "优化算法"
 
 
 class AlgorithmComplexity(str, Enum):

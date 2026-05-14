@@ -1,5 +1,11 @@
 """
 FIR/IIR 通用滤波器。
+
+包含两种经典数字滤波器实现：
+1. FIR 带通滤波器（Kaiser 窗设计） - 线性相位，适合相位保真度要求高的场景
+2. IIR 带通滤波器（椭圆滤波器） - 更陡的过渡带，计算效率更高
+
+参考书：第3章第5-6节 - FIR/IIR 滤波器
 """
 
 from typing import Any, ClassVar, Dict

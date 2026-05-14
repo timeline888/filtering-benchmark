@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Dict
 
 import numpy as np
 
-from ...algorithms.base import BaseAlgorithm
+from ...algorithms.base import BaseAlgorithm, _to_stereo, _from_stereo
 from ...algorithms.decorators import register_algorithm, log_execution, validate_params
 from ...core.types import AlgorithmCategory, AlgorithmComplexity
 
@@ -325,3 +325,136 @@ def pywt_threshold(data: np.ndarray, threshold: float, mode: str = "soft") -> np
     """阈值处理（兼容独立调用）"""
     import pywt
     return pywt.threshold(data, threshold, mode=mode)
+
+
+# ========== 6. SureShrink自适应阈值降噪 ==========
+
+@register_algorithm(
+    name="SureShrink自适应阈值降噪",
+    category=AlgorithmCategory.WAVELET,
+    complexity=AlgorithmComplexity.MEDIUM,
+    tags=["wavelet", "sureshrink", "adaptive", "sure"],
+)
+class SureShrinkDenoise(BaseAlgorithm):
+    """SureShrink自适应阈值降噪。
+
+    基于 Stein 无偏风险估计 (SURE) 对每一层小波系数独立选择最优阈值，
+    对于高稀疏层自动回退到 VisuShrink 全局阈值。
+    """
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "wavelet": "db4",
+        "level": 4,
+        "threshold_mode": "soft",
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        import pywt
+
+        params = {**self.params, **kwargs}
+        wavelet = params["wavelet"]
+        level = int(params["level"])
+        thr_mode = params["threshold_mode"]
+
+        orig_signal = signal
+        signal = _to_stereo(signal)
+
+        n_channels = signal.shape[0]
+        result = np.zeros_like(signal)
+
+        for ch in range(n_channels):
+            sig = signal[ch]
+            coeffs = pywt.wavedec(sig, wavelet, level=level)
+
+            # 噪声标准差估计（最细节层）
+            sigma = np.median(np.abs(coeffs[-1])) / 0.6745
+
+            for i in range(1, len(coeffs)):
+                d = coeffs[i]
+                threshold_visu = sigma * np.sqrt(2 * np.log(len(d)))
+                # 判断是否高稀疏层
+                dense_ratio = np.sum(np.abs(d) > sigma) / len(d)
+                if dense_ratio > 1.0 / np.sqrt(len(d)):
+                    # SURE 阈值
+                    sorted_sq = np.sort(np.abs(d / sigma)) ** 2
+                    n = len(sorted_sq)
+                    risks = (n - 2 * np.arange(1, n + 1) +
+                             np.cumsum(sorted_sq)) / n
+                    best = np.argmin(risks)
+                    t = sigma * np.sqrt(sorted_sq[best]) if sorted_sq[best] > 0 else 0
+                else:
+                    # 高稀疏层用 VisuShrink
+                    t = threshold_visu
+                coeffs[i] = pywt.threshold(d, t, mode=thr_mode)
+
+            result[ch] = pywt.waverec(coeffs, wavelet)[:len(sig)]
+
+        return _from_stereo(result, orig_signal)
+
+
+# ========== 7. 平移不变小波降噪 (TI-Wavelet) ==========
+
+@register_algorithm(
+    name="平移不变小波降噪",
+    category=AlgorithmCategory.WAVELET,
+    complexity=AlgorithmComplexity.MEDIUM,
+    tags=["wavelet", "shift-invariant", "ti-wavelet", "gibbs-free"],
+)
+class TiWaveletDenoise(BaseAlgorithm):
+    """平移不变小波降噪 (Translation-Invariant Wavelet Denoising)。
+
+    通过对信号进行多个循环平移后分别做小波阈值降噪，
+    再反向平移取平均，消除 DWT 的下采样导致的 Gibbs 伪影。
+    """
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "wavelet": "db4",
+        "level": 4,
+        "threshold_mode": "soft",
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        import pywt
+
+        params = {**self.params, **kwargs}
+        wavelet = params["wavelet"]
+        level = int(params["level"])
+        thr_mode = params["threshold_mode"]
+
+        is_1d = signal.ndim == 1
+        if is_1d:
+            signal = signal.reshape(1, -1)
+
+        n_channels, n_samples = signal.shape
+        result = np.zeros_like(signal)
+
+        for ch in range(n_channels):
+            sig = signal[ch]
+            N = len(sig)
+            # 以 2 的幂次平移
+            max_shift = max(1, int(np.log2(N)))
+            denoised_sum = np.zeros(N)
+
+            sigma = np.median(np.abs(
+                pywt.dwt(sig, wavelet)[0]
+            )) / 0.6745
+            threshold = sigma * np.sqrt(2 * np.log(N))
+
+            for shift_idx in range(max_shift):
+                step = 2 ** shift_idx
+                shifted = np.roll(sig, step)
+                coeffs = pywt.wavedec(shifted, wavelet, level=level)
+                coeffs_th = [coeffs[0]] + [
+                    pywt.threshold(c, threshold, mode=thr_mode)
+                    for c in coeffs[1:]
+                ]
+                denoised = pywt.waverec(coeffs_th, wavelet)[:N]
+                denoised_sum += np.roll(denoised, -step)
+
+            result[ch] = denoised_sum / max_shift
+
+        return result[0] if is_1d else result

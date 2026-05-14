@@ -160,6 +160,9 @@ class StochasticResonance(BaseAlgorithm):
     利用噪声能量增强信号特征。
     """
 
+    # 随机共振的 RK4 积分每步 O(N)，长时间序列有明显耗时，设安全上限。
+    max_signal_length: ClassVar[int] = 100000
+
     default_params: ClassVar[Dict[str, Any]] = {
         "a": 1.0,    # 双稳态势垒参数 a
         "b": 1.0,    # 双稳态势垒参数 b
@@ -169,6 +172,7 @@ class StochasticResonance(BaseAlgorithm):
     @log_execution
     @validate_params
     def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        self._check_signal_size(signal)
         params = {**self.params, **kwargs}
         a = params["a"]
         b = params["b"]
@@ -408,8 +412,8 @@ class NonLocalMeansDenoise(BaseAlgorithm):
         "h": 0.1,               # 滤波强度参数（指数衰减系数）
     }
 
-    # NLM 即使向量化后仍为 O(n × search_radius × patch_size)，
-    # 并需临时内存约 n × (2*patch_size+1) × 8 字节，设安全上限。
+    # NLM 即使向量化后仍为 O(n x search_radius x patch_size)，
+    # 并需临时内存约 n x (2*patch_size+1) x 8 字节，设安全上限。
     max_signal_length: ClassVar[int] = 50000
 
     @log_execution
@@ -525,7 +529,7 @@ class GraphSignalDenoise(BaseAlgorithm):
         "alpha": 0.5,        # 图正则化强度
     }
 
-    # kNN 图拉普拉斯矩阵构建为 O(N²)，设安全上限；
+    # kNN 图拉普拉斯矩阵构建为 O(N^2)，设安全上限；
     # 超过这个值时算法内部仍会自动降采样，但环境内存需常数
     max_signal_length: ClassVar[int] = 200000
 
@@ -645,6 +649,9 @@ class FractalDenoise(BaseAlgorithm):
     在变换域中保留具有分形特征的成分。
     """
 
+    # 分形降噪使用多尺度 DWT 分解及 R/S 分析，对长信号计算量大，设安全上限。
+    max_signal_length: ClassVar[int] = 200000
+
     default_params: ClassVar[Dict[str, Any]] = {
         "threshold": 0.1,   # 分形成分保留阈值
         "max_scale": 10,    # 最大分析尺度
@@ -653,6 +660,7 @@ class FractalDenoise(BaseAlgorithm):
     @log_execution
     @validate_params
     def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        self._check_signal_size(signal)
         params = {**self.params, **kwargs}
         threshold = params["threshold"]
         max_scale = int(params["max_scale"])

@@ -8,7 +8,7 @@ import numpy as np
 from scipy import signal as scipy_signal
 from scipy.fft import fft, ifft, fftfreq
 
-from ...algorithms.base import BaseAlgorithm
+from ...algorithms.base import BaseAlgorithm, _to_stereo, _from_stereo
 from ...algorithms.decorators import register_algorithm, log_execution, validate_params
 from ...core.types import AlgorithmCategory, AlgorithmComplexity
 
@@ -150,3 +150,84 @@ class HomomorphicFilter(BaseAlgorithm):
 
         # 指数变换还原
         return np.exp(filtered) * np.sign(signal + 1e-12)
+
+
+@register_algorithm(
+    name="多带频谱减法",
+    category=AlgorithmCategory.FREQ_DOMAIN,
+    complexity=AlgorithmComplexity.MEDIUM,
+    tags=["audio", "noise-reduction", "multi-band", "speech"],
+)
+class MultiBandSpectralSubtraction(BaseAlgorithm):
+    """多带频谱减法降噪，将频谱划分为多个子带独立处理。
+
+    相比标准频谱减法（4.2节）在全频带使用统一过减因子，
+    多带频谱减法对各子带独立估计噪声和过减因子，
+    更好地适应非平坦噪声频谱，减少音乐噪声。
+    """
+
+    default_params: ClassVar[Dict[str, Any]] = {
+        "n_bands": 4,
+        "over_subtraction_factor": 2.0,
+        "noise_floor": 0.01,
+    }
+
+    @log_execution
+    @validate_params
+    def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        params = {**self.params, **kwargs}
+        n_bands = int(params["n_bands"])
+        over_sub = float(params["over_subtraction_factor"])
+        noise_floor = float(params["noise_floor"])
+
+        orig_signal = signal
+        signal = _to_stereo(signal)
+
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+
+        for ch in range(n_channels):
+            output[ch] = self._multi_band_sub(signal[ch], sample_rate,
+                                                n_bands, over_sub, noise_floor)
+
+        return _from_stereo(output, orig_signal)
+
+    def _multi_band_sub(
+        self, sig: np.ndarray, fs: float,
+        n_bands: int, over_sub: float, noise_floor: float
+    ) -> np.ndarray:
+        N = len(sig)
+        f, t, Zxx = scipy_signal.stft(sig, fs=fs, nperseg=256, noverlap=128)
+        mag = np.abs(Zxx)
+        phase = np.angle(Zxx)
+
+        # 噪声估计（取前10帧）
+        noise_est = np.mean(mag[:, :10]**2, axis=1, keepdims=True)
+
+        # 划分子带
+        n_freq = len(f)
+        band_size = n_freq // n_bands
+        enhanced = np.zeros_like(mag)
+
+        for b in range(n_bands):
+            idx_low = b * band_size
+            idx_high = n_freq if b == n_bands - 1 else (b + 1) * band_size
+
+            sub_mag = mag[idx_low:idx_high, :]
+            sub_noise = noise_est[idx_low:idx_high]
+
+            # 子带 SNR 估计（取整个子带的平均功率）
+            sub_power = np.mean(sub_mag**2)  # scalar
+            noise_power = np.mean(sub_noise) + 1e-10  # scalar
+            snr_db = 10 * np.log10(sub_power / noise_power)
+
+            # 自适应过减因子（整带一致）
+            alpha = np.clip(over_sub - 0.15 * snr_db, 1.0, 5.0)
+            enhanced[idx_low:idx_high, :] = np.maximum(
+                sub_mag**2 - alpha * sub_noise,
+                noise_floor * sub_noise
+            )
+
+        mag_enhanced = np.sqrt(enhanced)
+        _, x_est = scipy_signal.istft(mag_enhanced * np.exp(1j * phase), fs=fs)
+        return x_est[:N]

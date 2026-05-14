@@ -1,5 +1,10 @@
 """
-低通巴特沃斯滤波器。
+低通巴特沃斯滤波器 (Low-Pass Butterworth Filter)
+
+基于 scipy.signal.butter 的巴特沃斯低通滤波器实现，
+使用 sosfiltfilt 进行零相位滤波，避免相位偏移。
+
+参考书：第3章第1节 - 低通滤波器
 """
 
 from typing import Any, ClassVar, Dict, List
