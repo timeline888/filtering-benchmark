@@ -33,3 +33,6 @@ Thumbs.db
 # Temp scripts
 _check_lines.ps1
 _create_repo.ps1
+_fix_*.py
+_query_complexity.py
+_query_*.py

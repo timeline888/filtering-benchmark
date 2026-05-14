@@ -236,6 +236,16 @@ class MainWindow(QMainWindow):
         """停止运行"""
         if self._worker:
             self._worker.abort()
+            # 立即反馈：禁用停止按钮，防止重复点击
+            self._exec_ctrl._stop_btn.setEnabled(False)
+            self._exec_ctrl._stop_btn.setText("⏳ 正在中止...")
+            self._exec_ctrl._stop_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #95a5a6; color: white;
+                    font-weight: bold; border-radius: 4px;
+                    padding: 6px 20px;
+                }
+            """)
         self._status_bar.showMessage("正在中止...")
 
     def _on_finished(self, report: EvaluationReport):
@@ -256,8 +266,12 @@ class MainWindow(QMainWindow):
     def _on_error(self, error_msg: str):
         """运行出错"""
         self._exec_ctrl.reset()
-        self._status_bar.showMessage("运行失败")
-        QMessageBox.critical(self, "运行错误", f"评估执行失败:\n{error_msg}")
+        # 用户主动中止不弹错误框
+        if "用户中止" in error_msg or "流水线被用户中止" in error_msg:
+            self._status_bar.showMessage("已中止")
+        else:
+            self._status_bar.showMessage("运行失败")
+            QMessageBox.critical(self, "运行错误", f"评估执行失败:\n{error_msg}")
         self._cleanup_thread()
 
     def _cleanup_thread(self):

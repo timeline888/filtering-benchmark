@@ -81,7 +81,7 @@ class ExecutionControlWidget(QWidget):
 
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(["全部算法 (all)", "选定算法 (selected)", "按类别 (category)"])
-        self._mode_combo.setCurrentIndex(0)
+        self._mode_combo.setCurrentIndex(1)
         config_layout.addRow("算法模式:", self._mode_combo)
 
         self._scoring_combo = QComboBox()

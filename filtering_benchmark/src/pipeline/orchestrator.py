@@ -221,9 +221,10 @@ class PipelineOrchestrator:
         logger.info(f"  成功: {success}/{total}")
 
     def _run_algorithms_sequential(self, algo_ids, signal_data, algo_config):
-        """顺序执行算法（单线程，带单算法超时保护）"""
+        """顺序执行算法（单线程，带单算法超时保护 + 轮询中止检查）"""
         total = len(algo_ids)
         timeout = max(1, int(self.config.execution.timeout_per_algorithm_sec))
+        poll_interval = 0.5  # 每 500ms 检查一次中止标志
         # 使用单线程池以便对每个算法施加 future.result(timeout=...) 保护
         with ThreadPoolExecutor(max_workers=1) as executor:
             for idx, algo_id in enumerate(algo_ids):
@@ -233,9 +234,20 @@ class PipelineOrchestrator:
                     self._execute_single_algorithm,
                     idx, algo_id, signal_data, algo_config, total,
                 )
-                try:
-                    future.result(timeout=timeout)
-                except FuturesTimeoutError:
+                # 轮询等待，确保中止信号能快速响应
+                elapsed = 0.0
+                while elapsed < timeout:
+                    if self._abort_flag:
+                        raise PipelineStageError("流水线被用户中止")
+                    try:
+                        future.result(timeout=poll_interval)
+                        # 正常完成
+                        break
+                    except FuturesTimeoutError:
+                        elapsed += poll_interval
+                        continue
+                else:
+                    # 超时退出
                     logger.warning(f"    算法 [{algo_id}] 执行超时 (>{timeout}s)，已标记失败")
                     # 超时的线程无法被强制 kill，继续下一个算法
                     self.context.denoised_results[algo_id] = DenoisedResult(
@@ -249,7 +261,7 @@ class PipelineOrchestrator:
                     )
 
     def _run_algorithms_parallel(self, algo_ids, signal_data, algo_config, workers):
-        """并行执行算法（线程池）"""
+        """并行执行算法（线程池，带轮询中止检查）"""
         total = len(algo_ids)
         # 预创建实例（避免线程安全竞争）
         tasks = []
@@ -272,6 +284,7 @@ class PipelineOrchestrator:
 
         completed = 0
         timeout = max(1, int(self.config.execution.timeout_per_algorithm_sec))
+        poll_interval = 0.5  # 每 500ms 检查一次中止标志
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_algo = {}
             future_submit_time = {}
@@ -292,13 +305,24 @@ class PipelineOrchestrator:
 
             for future in iterator:
                 if self._abort_flag:
-                    # 不能真正取消已提交的任务，但可以停止等待
                     raise PipelineStageError("流水线被用户中止")
                 algo_id = future_to_algo[future]
                 completed += 1
                 try:
-                    # 单算法超时保护
-                    result = future.result(timeout=timeout)
+                    # 轮询等待，确保中止能快速响应
+                    elapsed_wait = 0.0
+                    while elapsed_wait < timeout:
+                        if self._abort_flag:
+                            raise PipelineStageError("流水线被用户中止")
+                        try:
+                            result = future.result(timeout=poll_interval)
+                            break
+                        except FuturesTimeoutError:
+                            elapsed_wait += poll_interval
+                            continue
+                    else:
+                        raise FuturesTimeoutError(f"算法执行超时 (>{timeout}s)")
+
                     self.context.denoised_results[algo_id] = result
                     meta_name = result.algorithm_name
                     self.context.algorithm_metas[algo_id] = {
