@@ -6,19 +6,18 @@
 2. FilteredSignalPanel  — 滤波后信号的时域/FFT/包络谱（带算法选择下拉框）
 
 支持中文标签。
+支持matplotlib导航工具栏（缩放、平移、重置）。
 """
 
 from typing import Any, Dict, Optional
 
 import numpy as np
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
-    QLabel, QScrollArea, QVBoxLayout, QWidget,
+    QComboBox, QGroupBox, QHBoxLayout,
+    QLabel, QVBoxLayout, QWidget,
 )
-
 
 # ── 确保中文字体全局可用 ──
 import matplotlib.pyplot as _plt
@@ -36,12 +35,13 @@ class SignalPreviewCanvas(FigureCanvasQTAgg):
         self._setup_axes()
 
     def _setup_axes(self):
-        """创建三个子图"""
+        """创建三个子图，最大化利用空间"""
         self.figure.clear()
-        self._ax_time = self.figure.add_subplot(3, 1, 1)
-        self._ax_freq = self.figure.add_subplot(3, 1, 2)
-        self._ax_env = self.figure.add_subplot(3, 1, 3)
-        self.figure.tight_layout(pad=2.0)
+        # 使用 gridspec 精确控制布局，减小边距和间距
+        gs = self.figure.add_gridspec(3, 1, left=0.08, right=0.98, top=0.94, bottom=0.06, hspace=0.35)
+        self._ax_time = self.figure.add_subplot(gs[0])
+        self._ax_freq = self.figure.add_subplot(gs[1])
+        self._ax_env = self.figure.add_subplot(gs[2])
 
     def update_plots(self, data: np.ndarray, sample_rate: float,
                      title: str = "信号预览"):
@@ -69,19 +69,19 @@ class SignalPreviewCanvas(FigureCanvasQTAgg):
         self._ax_freq.set_title("频谱 (FFT)")
         self._ax_freq.grid(True, alpha=0.3)
 
-        # ── 3. 全频带包络谱 ──
+        # ── 3. 全频带包络谱（去除直流后再FFT） ──
         from scipy import signal
         analytic = signal.hilbert(data)
         envelope = np.abs(analytic)
-        env_spec = np.abs(np.fft.rfft(envelope))
+        envelope_ac = envelope - np.mean(envelope)  # 去除直流分量
+        env_spec = np.abs(np.fft.rfft(envelope_ac))
         self._ax_env.plot(freq_axis, env_spec, linewidth=0.5, color='#e67e22')
         self._ax_env.set_xlabel("频率 (Hz)")
         self._ax_env.set_ylabel("幅值")
         self._ax_env.set_title("全频带包络谱")
         self._ax_env.grid(True, alpha=0.3)
 
-        self.figure.suptitle(title, fontsize=10, fontweight='bold')
-        self.figure.tight_layout(pad=2.0, rect=[0, 0, 1, 0.96])
+        self.figure.suptitle(title, fontsize=10, fontweight='bold', y=0.98)
         self.draw()
 
     def clear(self):
@@ -99,31 +99,25 @@ class OriginalSignalPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
 
         # 信息标签
         self._info_label = QLabel("请加载信号以查看预览")
         self._info_label.setStyleSheet(
-            "color: #888; padding: 8px; font-size: 11px;")
-        scroll_layout.addWidget(self._info_label)
+            "color: #888; padding: 4px; font-size: 11px;")
+        layout.addWidget(self._info_label)
 
-        # 画布
+        # 画布（填满剩余空间）
         self._canvas = SignalPreviewCanvas(self)
         self._canvas.setVisible(False)
-        scroll_layout.addWidget(self._canvas)
+        layout.addWidget(self._canvas, stretch=1)
 
-        scroll_layout.addStretch()
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll)
+        # 工具栏
+        self._toolbar = NavigationToolbar2QT(self._canvas, self)
+        self._toolbar.setStyleSheet("QToolBar { border: none; }")
+        self._toolbar.setVisible(False)
+        layout.addWidget(self._toolbar)
 
     def update_signal(self, data: np.ndarray, sample_rate: float,
                       source_path: str = ""):
@@ -137,6 +131,7 @@ class OriginalSignalPanel(QWidget):
 
         self._canvas.update_plots(data, sample_rate, title)
         self._canvas.setVisible(True)
+        self._toolbar.setVisible(True)
 
         duration = len(data) / sample_rate
         self._info_label.setText(
@@ -149,6 +144,7 @@ class OriginalSignalPanel(QWidget):
         """清空"""
         self._canvas.clear()
         self._canvas.setVisible(False)
+        self._toolbar.setVisible(False)
         self._info_label.setText("请加载信号以查看预览")
 
 
@@ -166,9 +162,10 @@ class FilteredSignalPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
 
-        # ── 算法选择区（固定在顶部） ──
+        # ── 算法选择区 ──
         selector_group = QGroupBox("算法选择")
         selector_layout = QHBoxLayout(selector_group)
 
@@ -184,26 +181,19 @@ class FilteredSignalPanel(QWidget):
         # ── 信息标签 ──
         self._info_label = QLabel("请先运行评估以查看滤波结果")
         self._info_label.setStyleSheet(
-            "color: #888; padding: 4px 8px; font-size: 11px;")
+            "color: #888; padding: 4px; font-size: 11px;")
         layout.addWidget(self._info_label)
 
-        # ── 可滚动画布区 ──
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        scroll_content = QWidget()
-        self._scroll_layout = QVBoxLayout(scroll_content)
-        self._scroll_layout.setContentsMargins(4, 4, 4, 4)
-
+        # ── 画布（填满剩余空间） ──
         self._canvas = SignalPreviewCanvas(self)
         self._canvas.setVisible(False)
-        self._scroll_layout.addWidget(self._canvas)
+        layout.addWidget(self._canvas, stretch=1)
 
-        self._scroll_layout.addStretch()
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll)
+        # ── 工具栏 ──
+        self._toolbar = NavigationToolbar2QT(self._canvas, self)
+        self._toolbar.setStyleSheet("QToolBar { border: none; }")
+        self._toolbar.setVisible(False)
+        layout.addWidget(self._toolbar)
 
     # ── 公共接口 ──
 
@@ -233,6 +223,7 @@ class FilteredSignalPanel(QWidget):
         self._algo_combo.blockSignals(False)
         self._canvas.clear()
         self._canvas.setVisible(False)
+        self._toolbar.setVisible(False)
         self._info_label.setText("请先运行评估以查看滤波结果")
 
     # ── 内部方法 ──
@@ -254,6 +245,7 @@ class FilteredSignalPanel(QWidget):
         title = f"滤波结果 - {result.algorithm_name}"
         self._canvas.update_plots(signal_1d, self._sample_rate, title)
         self._canvas.setVisible(True)
+        self._toolbar.setVisible(True)
 
         self._info_label.setText(
             f"算法: {result.algorithm_name} | "

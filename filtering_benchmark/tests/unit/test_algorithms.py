@@ -3,8 +3,8 @@
 """
 
 import sys, os, numpy as np
-sys.path.insert(0, 'e:/Qoder项目/滤波基石系统设计/filtering_benchmark')
-sys.path.insert(0, os.path.join('e:/Qoder项目/滤波基石系统设计/filtering_benchmark', "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 import pytest
 from src.algorithms.base import _to_stereo, _from_stereo
@@ -15,7 +15,7 @@ from src.core.exceptions import SignalTooLargeError
 
 
 def _sig():
-    fs = 3000
+    fs = 12000
     t = np.linspace(0, 1, fs, 0)
     return np.sin(2*np.pi*78.5*t) + 0.3*np.random.randn(fs), fs
 

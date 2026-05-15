@@ -291,14 +291,14 @@ class ResultsTabWidget(QWidget):
         self._tabs.setCurrentWidget(self._filtered_panel)
 
     def clear(self):
-        """清空结果"""
+        """清空结果（保留原始信号谱图不变）"""
         self._report = None
         self._rank_model.set_rankings([])
         self._metric_table.setRowCount(0)
         self._metric_table.setColumnCount(0)
         self._chart_canvas.clear()
         self._chart_canvas.draw()
-        self._original_panel.clear()
+        # 不清空 _original_panel——原始信号图应在整个会话期间保持可见
         self._filtered_panel.clear()
         self._report_browser.clear()
         self._info_label.setText("暂无评估结果")

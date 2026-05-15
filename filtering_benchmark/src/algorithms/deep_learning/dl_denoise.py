@@ -47,7 +47,7 @@ except ImportError:
 # ==================== 全局工具函数 ====================
 
 
-def _norch_fallback_spectral(
+def _no_torch_fallback_spectral(
     signal: np.ndarray,
     sample_rate: float,
     cutoff_ratio: float = 0.1,
@@ -86,7 +86,7 @@ def _norch_fallback_spectral(
     return output[0] if sig_1d else output
 
 
-def _norch_fallback_wavelet(
+def _no_torch_fallback_wavelet(
     signal: np.ndarray,
     wavelet: str = "db4",
     level: int = 3,
@@ -123,7 +123,7 @@ def _norch_fallback_wavelet(
     return output[0] if sig_1d else output
 
 
-def _norch_fallback_wiener(
+def _no_torch_fallback_wiener(
     signal: np.ndarray,
     win_size: int = 5,
 ) -> np.ndarray:
@@ -742,9 +742,9 @@ class DaeDenoise(BaseAlgorithm):
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
-                result = _norch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
+                result = _no_torch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
         else:
-            result = _norch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
+            result = _no_torch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
 
         return _from_stereo(result, orig_signal)
 
@@ -825,9 +825,9 @@ class CdaDenoise(BaseAlgorithm):
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
-                result = _norch_fallback_wavelet(signal, wavelet="db4", level=3)
+                result = _no_torch_fallback_wavelet(signal, wavelet="db4", level=3)
         else:
-            result = _norch_fallback_wavelet(signal, wavelet="db4", level=3)
+            result = _no_torch_fallback_wavelet(signal, wavelet="db4", level=3)
 
         return _from_stereo(result, orig_signal)
 
@@ -908,9 +908,9 @@ class DncnnDenoise(BaseAlgorithm):
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
-                result = _norch_fallback_wiener(signal, win_size=5)
+                result = _no_torch_fallback_wiener(signal, win_size=5)
         else:
-            result = _norch_fallback_wiener(signal, win_size=5)
+            result = _no_torch_fallback_wiener(signal, win_size=5)
 
         return _from_stereo(result, orig_signal)
 
@@ -992,9 +992,9 @@ class UnetDenoise(BaseAlgorithm):
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
-                result = _norch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
+                result = _no_torch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
         else:
-            result = _norch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
+            result = _no_torch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
 
         return _from_stereo(result, orig_signal)
 
@@ -1074,9 +1074,9 @@ class GanDenoise(BaseAlgorithm):
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
-                result = _norch_fallback_wavelet(signal, wavelet="sym8", level=4)
+                result = _no_torch_fallback_wavelet(signal, wavelet="sym8", level=4)
         else:
-            result = _norch_fallback_wavelet(signal, wavelet="sym8", level=4)
+            result = _no_torch_fallback_wavelet(signal, wavelet="sym8", level=4)
 
         return _from_stereo(result, orig_signal)
 
@@ -1155,9 +1155,9 @@ class DrsnDenoise(BaseAlgorithm):
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
-                result = _norch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
+                result = _no_torch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
         else:
-            result = _norch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
+            result = _no_torch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.15)
 
         return _from_stereo(result, orig_signal)
 
@@ -1238,9 +1238,9 @@ class TcnLstmDenoise(BaseAlgorithm):
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
-                result = _norch_fallback_wiener(signal, win_size=7)
+                result = _no_torch_fallback_wiener(signal, win_size=7)
         else:
-            result = _norch_fallback_wiener(signal, win_size=7)
+            result = _no_torch_fallback_wiener(signal, win_size=7)
 
         return _from_stereo(result, orig_signal)
 
@@ -1327,9 +1327,9 @@ class TransformerDenoise(BaseAlgorithm):
             try:
                 result = self._denoise_torch(signal, params)
             except Exception:
-                result = _norch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.1)
+                result = _no_torch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.1)
         else:
-            result = _norch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.1)
+            result = _no_torch_fallback_spectral(signal, sample_rate, cutoff_ratio=0.1)
 
         return _from_stereo(result, orig_signal)
 

@@ -151,11 +151,12 @@ class SignalInputWidget(QWidget):
 
         layout.addWidget(param_group)
 
-        # 信号预览
+        # 信号预览（已隐藏，保留代码结构以便后续恢复）
         preview_group = QGroupBox("信号预览")
         preview_layout = QVBoxLayout(preview_group)
         self._preview_canvas = SignalPreviewCanvas()
         preview_layout.addWidget(self._preview_canvas)
+        preview_group.setVisible(False)  # 隐藏预览区域
         layout.addWidget(preview_group)
 
     def _on_mode_changed(self, checked: bool):
@@ -166,8 +167,9 @@ class SignalInputWidget(QWidget):
 
     def _browse_file(self):
         from PyQt6.QtWidgets import QFileDialog
+        default_dir = r"E:\Qoder项目\滤波基石系统设计\cwru"
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择信号文件", "",
+            self, "选择信号文件", default_dir,
             "信号文件 (*.mat *.wav *.csv *.txt *.h5 *.hdf5);;MATLAB (*.mat);;WAV (*.wav);;CSV (*.csv);;TXT (*.txt);;HDF5 (*.h5 *.hdf5);;所有文件 (*.*)"
         )
         if path:

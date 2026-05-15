@@ -1,6 +1,6 @@
 
 import sys
-import os, sys; sys.path.insert(0, 'e:/Qoder项目/滤波基石系统设计/filtering_benchmark'); sys.path.insert(0, os.path.join('e:/Qoder项目/滤波基石系统设计/filtering_benchmark', "src"))
+import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..')); sys.path.insert(0, os.path.join('e:/Qoder项目/滤波基石系统设计/filtering_benchmark', "src"))
 
 def test_singleton():
     from src.algorithms.registry import AlgorithmRegistry, registry

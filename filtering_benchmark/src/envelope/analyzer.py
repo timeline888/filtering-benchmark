@@ -97,14 +97,16 @@ class EnvelopeAnalyzer:
     @staticmethod
     def _compute_spectrum(envelope: np.ndarray, fs: float,
                           n_fft: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
-        """计算包络信号的幅值谱"""
+        """计算包络信号的幅值谱（自动去除直流分量）"""
         n = envelope.shape[-1]
         if n_fft is not None and n_fft > n:
             n = n_fft
         elif n_fft is not None:
             n = n_fft
 
-        spectrum = np.abs(np.fft.rfft(envelope, n=n, axis=-1))
+        # 去除包络的直流分量，避免DC峰值淹没频谱细节
+        envelope_ac = envelope - np.mean(envelope, axis=-1, keepdims=True)
+        spectrum = np.abs(np.fft.rfft(envelope_ac, n=n, axis=-1))
         freq_axis = np.fft.rfftfreq(n, 1.0 / fs)
         return spectrum, freq_axis
 

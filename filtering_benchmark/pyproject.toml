@@ -70,10 +70,11 @@ test = ["pytest", "pytest-cov"]
 dev = ["filtering-benchmark[full,test]"]
 
 [project.scripts]
-filter-bench = "filtering_benchmark.cli.main:app"
+filter-bench = "cli.main:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -81,7 +82,7 @@ python_files = ["test_*.py"]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["filtering_benchmark"]
+source = ["src"]
 
 [tool.mypy]
 python_version = "3.11"

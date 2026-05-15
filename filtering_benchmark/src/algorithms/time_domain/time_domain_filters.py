@@ -56,7 +56,15 @@ class MedianFilter(BaseAlgorithm):
         params = {**self.params, **kwargs}
         k = int(params["kernel_size"])
         k = k + 1 if k % 2 == 0 else k  # 确保奇数
-        return scipy_signal.medfilt(signal, kernel_size=k)
+
+        # medfilt对多维输入做多维滤波，因此需逐通道处理1D信号
+        orig_signal = signal
+        signal = _to_stereo(signal)
+        n_channels, n_samples = signal.shape
+        output = np.zeros_like(signal)
+        for ch in range(n_channels):
+            output[ch] = scipy_signal.medfilt(signal[ch], kernel_size=k)
+        return _from_stereo(output, orig_signal)
 
 
 @register_algorithm(

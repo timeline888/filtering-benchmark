@@ -1,6 +1,6 @@
 
 import sys, numpy as np
-import os, sys; sys.path.insert(0, 'e:/Qoder项目/滤波基石系统设计/filtering_benchmark'); sys.path.insert(0, os.path.join('e:/Qoder项目/滤波基石系统设计/filtering_benchmark', "src"))
+import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..')); sys.path.insert(0, os.path.join('e:/Qoder项目/滤波基石系统设计/filtering_benchmark', "src"))
 
 def _sig():
     fs = 12000
