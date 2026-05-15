@@ -2,11 +2,12 @@
 算法装饰器工具集。
 
 - @register_algorithm: 声明式注册算法
-- @log_execution: 自动记录算法执行日志
+- @log_execution: 自动记录算法执行日志（可通过环境变量 FILTERING_LOG_ENABLED=0 关闭）
 - @validate_params: 自动参数校验
 """
 
 import functools
+import os
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
@@ -16,6 +17,9 @@ from loguru import logger
 from ..core.types import AlgorithmCategory, AlgorithmComplexity
 from .base import BaseAlgorithm
 from .registry import registry
+
+# 日志开关：可通过环境变量 FILTERING_LOG_ENABLED=0 禁用日志，提升性能
+_LOG_ENABLED = os.getenv("FILTERING_LOG_ENABLED", "1") == "1"
 
 T = TypeVar("T", bound=Type[BaseAlgorithm])
 
@@ -66,7 +70,12 @@ def log_execution(func: Callable) -> Callable:
     """
     算法执行日志装饰器。
     自动记录输入/输出/耗时。
+    可通过环境变量 FILTERING_LOG_ENABLED=0 禁用，提升性能。
     """
+    if not _LOG_ENABLED:
+        # 日志禁用时，直接返回原函数，零开销
+        return func
+
     @functools.wraps(func)
     def wrapper(self, signal, sample_rate, **kwargs):
         logger.info(f"[{self.name}] 开始降噪处理, signal.shape={signal.shape}, fs={sample_rate}Hz")

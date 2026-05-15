@@ -2,6 +2,7 @@
 小波变换类降噪算法：小波阈值、小波包、经验小波变换(EWT)、双树复小波(DTCWT)、平稳小波(SWT)。
 """
 
+import warnings
 from typing import Any, ClassVar, Dict
 
 import numpy as np
@@ -286,7 +287,11 @@ class SwtDenoise(BaseAlgorithm):
     tags=["ewt", "adaptive", "fourier-segment"],
 )
 class EwtDenoise(BaseAlgorithm):
-    """经验小波变换 (EWT) 降噪，根据信号频谱特征自适应分割并构造滤波器组"""
+    """经验小波变换 (EWT) 降噪，根据信号频谱特征自适应分割并构造滤波器组
+
+    注意：EWT 本质上是信号分解方法，而非传统滤器。
+    当前实现使用小波包分解作为近似。
+    """
 
     default_params: ClassVar[Dict[str, Any]] = {
         "n_modes": 5,
@@ -297,6 +302,12 @@ class EwtDenoise(BaseAlgorithm):
     @log_execution
     @validate_params
     def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        warnings.warn(
+            "[EWT] 经验小波变换本质上是信号分解方法，而非传统滤波器。"
+            "当前实现使用小波包分解作为近似。",
+            UserWarning,
+            stacklevel=2,
+        )
         params = {**self.params, **kwargs}
         n_modes = int(params["n_modes"])
 

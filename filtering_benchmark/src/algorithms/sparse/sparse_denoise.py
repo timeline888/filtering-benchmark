@@ -10,6 +10,7 @@
 所有算法继承自 BaseAlgorithm，通过 @register_algorithm 装饰器注册。
 """
 
+import warnings
 from typing import Any, ClassVar, Dict, Optional
 
 import numpy as np
@@ -292,6 +293,8 @@ class OrthogonalMatchingPursuitDenoise(BaseAlgorithm):
 class BasisPursuitDenoise(BaseAlgorithm):
     """基追踪降噪 (Basis Pursuit Denoising)。
 
+    注意：BPDN 本质上是稀疏恢复优化算法，而非传统滤波器。
+
     通过最小化 L1 范数正则化的重构误差来寻找信号的稀疏表示：
         min ||x||_1  subject to  ||Dx - y||_2 <= epsilon
     这里使用OMP算法进行近似求解，平衡稀疏性与重构保真度。
@@ -309,6 +312,12 @@ class BasisPursuitDenoise(BaseAlgorithm):
     @log_execution
     @validate_params
     def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        warnings.warn(
+            "[BPDN] 基追踪降噪本质上是稀疏恢复优化算法，而非传统滤波器。"
+            "当前实现使用 OMP 作为近似。",
+            UserWarning,
+            stacklevel=2,
+        )
         params = {**self.params, **kwargs}
         lambda_ = float(params.get("lambda_", 0.1))
 

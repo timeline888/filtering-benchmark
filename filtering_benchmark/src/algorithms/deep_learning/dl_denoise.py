@@ -703,7 +703,7 @@ class DaeDenoise(BaseAlgorithm):
     当 torch 不可用时，回退到频域软阈值滤波。
     """
 
-    requires_gpu: ClassVar[bool] = False
+    max_signal_length: ClassVar[int] = 100000  # 简单网络，支持较长信号
 
     default_params: ClassVar[Dict[str, Any]] = {
         "encoding_dim": 16,
@@ -738,6 +738,10 @@ class DaeDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
+        # Auto-setup if network not built
+        if self._net is None:
+            self.setup()
+        
         if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)
@@ -784,14 +788,14 @@ class DaeDenoise(BaseAlgorithm):
 )
 class CdaDenoise(BaseAlgorithm):
     """卷积去噪自编码器 (Convolutional Denoising Autoencoder, CDAE)。
-
+    
     使用轻量级1D卷积自编码器对信号进行降噪。
     在推理时即时构建网络，在CPU上运行。
-
+    
     当 torch 不可用时，回退到小波阈值降噪。
     """
 
-    requires_gpu: ClassVar[bool] = False
+    max_signal_length: ClassVar[int] = 100000  # 卷积网络，支持较长信号
 
     default_params: ClassVar[Dict[str, Any]] = {
         "kernel_size": 3,
@@ -821,6 +825,10 @@ class CdaDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
+        # Auto-setup if network not built
+        if self._net is None:
+            self.setup()
+        
         if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)
@@ -863,14 +871,14 @@ class CdaDenoise(BaseAlgorithm):
 )
 class DncnnDenoise(BaseAlgorithm):
     """DnCNN (Denoising Convolutional Neural Network) 降噪。
-
+    
     使用残差学习的卷积网络对信号进行降噪。
     网络学习的是噪声残差，最终输出 = 输入 - 预测噪声。
-
+    
     当 torch 不可用时，回退到维纳滤波。
     """
 
-    requires_gpu: ClassVar[bool] = False
+    max_signal_length: ClassVar[int] = 50000  # 残差网络，中等长度信号
 
     default_params: ClassVar[Dict[str, Any]] = {
         "n_layers": 10,
@@ -904,6 +912,10 @@ class DncnnDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
+        # Auto-setup if network not built
+        if self._net is None:
+            self.setup()
+        
         if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)
@@ -956,7 +968,7 @@ class UnetDenoise(BaseAlgorithm):
     当 torch 不可用时，回退到频域软阈值滤波。
     """
 
-    requires_gpu: ClassVar[bool] = False
+    max_signal_length: ClassVar[int] = 50000  # UNet架构，中等长度信号
 
     default_params: ClassVar[Dict[str, Any]] = {
         "n_channels": 16,
@@ -988,6 +1000,10 @@ class UnetDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
+        # Auto-setup if network not built
+        if self._net is None:
+            self.setup()
+        
         if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)
@@ -1039,8 +1055,6 @@ class GanDenoise(BaseAlgorithm):
     当 torch 不可用时，回退到小波阈值降噪。
     """
 
-    requires_gpu: ClassVar[bool] = False
-
     default_params: ClassVar[Dict[str, Any]] = {
         "latent_dim": 16,
         "n_iter": 20,
@@ -1070,6 +1084,10 @@ class GanDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
+        # Auto-setup if network not built
+        if self._net is None:
+            self.setup()
+        
         if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)
@@ -1119,8 +1137,6 @@ class DrsnDenoise(BaseAlgorithm):
     当 torch 不可用时，回退到频域软阈值滤波。
     """
 
-    requires_gpu: ClassVar[bool] = False
-
     default_params: ClassVar[Dict[str, Any]] = {
         "n_filters": 16,
         "depth": 6,
@@ -1151,6 +1167,10 @@ class DrsnDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
+        # Auto-setup if network not built
+        if self._net is None:
+            self.setup()
+        
         if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)
@@ -1200,8 +1220,6 @@ class TcnLstmDenoise(BaseAlgorithm):
     当 torch 不可用时，回退到维纳滤波。
     """
 
-    requires_gpu: ClassVar[bool] = False
-
     default_params: ClassVar[Dict[str, Any]] = {
         "n_filters": 16,
         "kernel_size": 3,
@@ -1234,6 +1252,10 @@ class TcnLstmDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
+        # Auto-setup if network not built
+        if self._net is None:
+            self.setup()
+        
         if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)
@@ -1286,7 +1308,7 @@ class TransformerDenoise(BaseAlgorithm):
     当 torch 不可用时，回退到频域软阈值滤波。
     """
 
-    requires_gpu: ClassVar[bool] = False
+    max_signal_length: ClassVar[int] = 30000  # Transformer最复杂，限制最严格
 
     default_params: ClassVar[Dict[str, Any]] = {
         "d_model": 32,
@@ -1323,6 +1345,10 @@ class TransformerDenoise(BaseAlgorithm):
         orig_signal = signal  # save original for shape restoration
         signal = _to_stereo(signal)
 
+        # Auto-setup if network not built
+        if self._net is None:
+            self.setup()
+        
         if _TORCH_AVAILABLE and self._net is not None:
             try:
                 result = self._denoise_torch(signal, params)

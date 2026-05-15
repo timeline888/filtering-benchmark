@@ -13,6 +13,7 @@
 所有算法继承自 BaseAlgorithm，通过 @register_algorithm 装饰器注册。
 """
 
+import warnings
 from typing import Any, ClassVar, Dict, Optional
 
 import numpy as np
@@ -709,6 +710,8 @@ class KernelPCADenoise(BaseAlgorithm):
 class JadeDenoise(BaseAlgorithm):
     """联合近似对角化 (JADE) 盲源分离降噪。
 
+    注意：JADE 本质上是盲源分离算法，而非传统滤波器。
+
     通过联合对角化一组四阶累积量矩阵实现更稳定、
     确定性的盲源分离。相比 FastICA 对初始化不敏感，
     不需要迭代优化，适合于短时信号处理。
@@ -724,6 +727,12 @@ class JadeDenoise(BaseAlgorithm):
     @log_execution
     @validate_params
     def denoise(self, signal: np.ndarray, sample_rate: float, **kwargs) -> np.ndarray:
+        warnings.warn(
+            "[JADE] 联合近似对角化本质上是盲源分离算法，而非传统滤波器。"
+            "当前实现使用 FastICA 作为近似。",
+            UserWarning,
+            stacklevel=2,
+        )
         params = {**self.params, **kwargs}
         n_components = params.get("n_components")
 

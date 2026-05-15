@@ -225,3 +225,104 @@ if __name__ == "__main__":
     registry.ensure_discovered()
     for _id in sorted(registry.list_ids()):
         print(_id)
+
+
+# ==================== 新增测试：针对代码审查修复的验证 ====================
+
+class TestAutoSetup:
+    """测试 DL 算法的自动 setup() 调用（Task #1 修复验证）"""
+
+    def test_dl_auto_setup_without_manual_setup(self):
+        """验证 DL 算法在未手动调用 setup() 时，denoise() 会自动调用"""
+        from src.algorithms import registry
+        registry.ensure_discovered()
+
+        # 选择一个 DL 算法进行测试
+        dl_algo_id = "dae_denoise"  # DAE 算法
+        if dl_algo_id not in registry.list_ids():
+            pytest.skip(f"{dl_algo_id} 未注册，跳过测试")
+
+        inst = registry.create_instance(dl_algo_id)
+        # 不调用 inst.setup()，直接调用 denoise()
+        # 如果自动 setup 工作正常，不应该抛出 AttributeError 或 TypeError
+        try:
+            s = np.zeros(512), fs = 12000
+            result = inst.denoise(s, fs)
+            # 如果能执行到这里，说明自动 setup 工作了
+            assert result is not None
+        except Exception as e:
+            # 允许其他异常（如 torch 不可用时的 fallback），但不应是 "_net" 相关的 AttributeError
+            assert "_net" not in str(e), f"自动 setup 可能未工作: {e}"
+
+
+class TestImpostorWarnings:
+    """测试冒充算法的运行时警告（Task #2 修复验证）"""
+
+    def test_ewt_warning(self):
+        """验证 EWT 算法会发出警告"""
+        import warnings
+        from src.algorithms import registry
+        registry.ensure_discovered()
+
+        if "empirical_wavelet" not in registry.list_ids():
+            pytest.skip("empirical_wavelet 未注册，跳过测试")
+
+        inst = registry.create_instance("empirical_wavelet")
+        s, fs = np.zeros(512), 12000
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            try:
+                inst.denoise(s, fs)
+            except Exception:
+                pass  # 忽略执行错误，只检查警告
+
+        # 检查是否发出了警告
+        warning_msgs = [str(warning.message) for warning in w]
+        assert any("EWT" in msg for msg in warning_msgs), f"EWT 应发出警告，实际警告: {warning_msgs}"
+
+    def test_jade_warning(self):
+        """验证 JADE 算法会发出警告"""
+        import warnings
+        from src.algorithms import registry
+        registry.ensure_discovered()
+
+        if "jade_denoise" not in registry.list_ids():
+            pytest.skip("jade_denoise 未注册，跳过测试")
+
+        inst = registry.create_instance("jade_denoise")
+        s, fs = np.zeros(512), 12000
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            try:
+                inst.denoise(s, fs)
+            except Exception:
+                pass  # 忽略执行错误，只检查警告
+
+        warning_msgs = [str(warning.message) for warning in w]
+        assert any("JADE" in msg for msg in warning_msgs), f"JADE 应发出警告，实际警告: {warning_msgs}"
+
+    def test_bpdn_warning(self):
+        """验证 BPDN 算法会发出警告"""
+        import warnings
+        from src.algorithms import registry
+        registry.ensure_discovered()
+
+        if "basis_pursuit_denoise" not in registry.list_ids():
+            pytest.skip("basis_pursuit_denoise 未注册，跳过测试")
+
+        inst = registry.create_instance("basis_pursuit_denoise")
+        s, fs = np.zeros(512), 12000
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            try:
+                inst.denoise(s, fs)
+            except Exception:
+                pass  # 忽略执行错误，只检查警告
+
+        warning_msgs = [str(warning.message) for warning in w]
+        assert any("BPDN" in msg for msg in warning_msgs), f"BPDN 应发出警告，实际警告: {warning_msgs}"
+
+
